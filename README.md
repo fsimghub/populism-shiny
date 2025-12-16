@@ -42,9 +42,9 @@ The app automatically downloads the file on first run if it is not already prese
 git clone https://github.com/fsimghub/populism-shiny.git
 cd populism-shiny
 
-# Run the app
-# The app will automatically check for and install any missing packages
-shiny::runApp()
+# Run the app. It will automatically check for and install any missing R packages
+R -e "shiny::runApp()"
+
 ```
 ## Citation
 
