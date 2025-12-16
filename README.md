@@ -43,7 +43,7 @@ git clone https://github.com/fsimghub/populism-shiny.git
 cd populism-shiny
 
 # Run the app. It will automatically check for and install any missing R packages
-R -e "shiny::runApp()"
+R -e "shiny::runApp(launch.browser = TRUE)"
 
 ```
 ## Citation
