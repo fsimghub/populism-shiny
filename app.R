@@ -20,6 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+data_url <- "https://github.com/fsimghub/populism-shiny/releases/download/v1.0-data/ShinyPopDat.qs"
+
+# Download if not already present (runs only once per deployment/session as needed)
+if (!file.exists("data/ShinyPopDat.qs")) {
+  dir.create("data", showWarnings = FALSE)
+  download.file(data_url, "data/ShinyPopDat.qs", mode = "wb")
+}
 
 rm(list=ls())
 gc()
