@@ -24,3 +24,8 @@ install.packages(c("shiny", "qs", ...))  # add any other required packages
 
 # Run the app
 shiny::runApp()
+```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
