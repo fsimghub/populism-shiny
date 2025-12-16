@@ -42,10 +42,8 @@ The app automatically downloads the file on first run if it is not already prese
 git clone https://github.com/fsimghub/populism-shiny.git
 cd populism-shiny
 
-# Install dependencies (if needed)
-install.packages(c("shiny", "qs", "ggplot2", "dplyr"))  # add any other required packages
-
 # Run the app
+# The app will automatically check for and install any missing packages
 shiny::runApp()
 ```
 ## Citation
