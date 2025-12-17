@@ -31,9 +31,6 @@ if (!file.exists("data/ShinyPopDat.qs")) {
 rm(list=ls())
 gc()
 
-# Set working directory
-setwd("~/Nextcloud/Projekte/Populism_v2/Populism-Shiny-App")
-
 # Check if the 'pacman' package is installed; if not, install it from CRAN
 if (!require("pacman", character.only = TRUE)) {
   install.packages("pacman")
