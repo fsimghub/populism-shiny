@@ -31,6 +31,9 @@ if (!file.exists("data/ShinyPopDat.qs")) {
 rm(list=ls())
 gc()
 
+# Set working directory
+setwd("~/Nextcloud/Projekte/Populism_v2/Populism-Shiny-App")
+
 # Check if the 'pacman' package is installed; if not, install it from CRAN
 if (!require("pacman", character.only = TRUE)) {
   install.packages("pacman")
@@ -99,10 +102,10 @@ plot_effects <- function(dt,
     "Disposable Income Share: Middle 40 percent",
     "Disposable Income Share: Top 10 percent",
     "Disposable Income Share: Top 1 percent",
-    "Pre-Tax National Income Share (WID)",
-    "Disposable National Income Share (WID)",
-    "Disposable Gini (SWIID)",
-    "Market Gini (SWIID)",
+    "Pre-Tax Income Gini (WID)",
+    "Disposable Income Gini (WID)",
+    "Disposable Income Gini (SWIID)",
+    "Market Income Gini (SWIID)",
     "Real GDP per Capita",
     "Inflation Rate",
     "Government Debt / GDP",
@@ -117,6 +120,14 @@ plot_effects <- function(dt,
   )
   plot_subtitle <- var_labels[in_variable]
   if (is.na(plot_subtitle)) plot_subtitle <- in_variable
+  
+  # Scaling setup -----------------------------------------------------------
+  percent_vars <- c(
+    "sptinc992j_p0p50", "sptinc992j_p50p90", "sptinc992j_p90p100", "sptinc992j_p99p100",
+    "sdiinc992j_p0p50", "sdiinc992j_p50p90", "sdiinc992j_p90p100", "sdiinc992j_p99p100",
+    "mad_gdppc", "inflrate", "gmd_govdebt_GDP", "gptinc992j", "gdiinc992j"
+  )
+  multiplier <- if (in_variable %in% percent_vars) 100 else 1
   
   # Title -------------------------------------------------------------------
   treat_year <- as.integer(substr(in_casename, nchar(in_casename) - 3, nchar(in_casename)))
@@ -147,21 +158,51 @@ plot_effects <- function(dt,
   # Level transformations ---------------------------------------------------
   if (series %in% c("level", "origlvl")) {
     selected[, `:=`(
-      treated_level       = observed - ATT,
-      ci_low_level        = observed - ATT_high,
-      ci_high_level       = observed - ATT_low,
+      treated_level = observed - ATT,
+      ci_low_level = observed - ATT_high,
+      ci_high_level = observed - ATT_low,
       backtrace_3yr_level = ifelse(!is.na(backtrace_3yr_effect), observed - backtrace_3yr_effect, NA),
       backtrace_5yr_level = ifelse(!is.na(backtrace_5yr_effect), observed - backtrace_5yr_effect, NA)
     )]
     if (series == "origlvl") {
       selected[, `:=`(
-        observed            = observed + base_value,
-        treated_level       = treated_level + base_value,
-        ci_low_level        = ci_low_level + base_value,
-        ci_high_level       = ci_high_level + base_value,
+        observed = observed + base_value,
+        treated_level = treated_level + base_value,
+        ci_low_level = ci_low_level + base_value,
+        ci_high_level = ci_high_level + base_value,
         backtrace_3yr_level = backtrace_3yr_level + base_value,
         backtrace_5yr_level = backtrace_5yr_level + base_value
       )]
+    }
+  }
+  
+  # Apply percentage scaling to computed columns ----------------------------
+  if (multiplier != 1) {
+    if (series %in% c("level", "origlvl")) {
+      selected[, `:=`(
+        observed = observed * multiplier,
+        treated_level = treated_level * multiplier,
+        ci_low_level = ci_low_level * multiplier,
+        ci_high_level = ci_high_level * multiplier,
+        backtrace_3yr_level = backtrace_3yr_level * multiplier,
+        backtrace_5yr_level = backtrace_5yr_level * multiplier
+      )]
+    } else if (series == "att") {
+      selected[, `:=`(
+        ATT = ATT * multiplier,
+        ATT_low = ATT_low * multiplier,
+        ATT_high = ATT_high * multiplier,
+        backtrace_3yr_effect = backtrace_3yr_effect * multiplier,
+        backtrace_5yr_effect = backtrace_5yr_effect * multiplier
+      )]
+    }
+    
+    # Scale permutation lists (if present)
+    if ("placebo_effects" %in% names(selected) && length(selected$placebo_effects[[1]]) > 0) {
+      selected[, placebo_effects := lapply(placebo_effects, function(v) v * multiplier)]
+    }
+    if ("loo_effects" %in% names(selected) && length(selected$loo_effects[[1]]) > 0) {
+      selected[, loo_effects := lapply(loo_effects, function(v) v * multiplier)]
     }
   }
   
@@ -174,13 +215,13 @@ plot_effects <- function(dt,
   
   # Main lines --------------------------------------------------------------
   if (series == "att") {
-    p <- p + geom_line(aes(y = ATT, linetype = "ATT"), 
+    p <- p + geom_line(aes(y = ATT, linetype = "ATT"),
                        color = "black", linewidth = 0.8)
   } else {
     p <- p +
-      geom_line(aes(y = observed, linetype = "Observed"), 
+      geom_line(aes(y = observed, linetype = "Observed"),
                 color = "black", linewidth = 0.8) +
-      geom_line(aes(y = treated_level, linetype = "Counterfactual"), 
+      geom_line(aes(y = treated_level, linetype = "Counterfactual"),
                 color = "black", linewidth = 0.8)
   }
   
@@ -195,7 +236,7 @@ plot_effects <- function(dt,
     }
   }
   
-  # Zero line (only in att) — fixed to avoid warning ------------------------
+  # Zero line (only in att) -------------------------------------------------
   if (series == "att") {
     p <- p + geom_hline(yintercept = 0, linetype = "solid", color = "grey60", linewidth = 0.5,
                         aes(linetype = "Zero"))
@@ -218,18 +259,18 @@ plot_effects <- function(dt,
     p <- p + geom_vline(xintercept = -5, linetype = "dotdash", color = "#1b9e77", linewidth = 0.8)
   }
   
-  # Case permutations (only allowed in att) ---------------------------------
+  # Case permutations -------------------------------------------------------
   has_permutations <- FALSE
   if (set_case_permutation && length(selected$placebo_effects[[1]]) > 0) {
     K <- length(selected$placebo_effects[[1]])
     placebo_dt <- data.table(
-      time  = rep(selected$time, each = K),
+      time = rep(selected$time, each = K),
       value = unlist(selected$placebo_effects),
       group = factor(rep(1:K, times = nrow(selected)))
     )
     has_permutations <- TRUE
     p <- p + new_scale_color() +
-      geom_line(data = placebo_dt, 
+      geom_line(data = placebo_dt,
                 aes(x = time, y = value, color = "Placebo Cases", group = group),
                 alpha = 0.2, linewidth = 0.3)
   }
@@ -237,34 +278,48 @@ plot_effects <- function(dt,
   # LOO permutations --------------------------------------------------------
   if (set_loo_permutation && length(selected$loo_effects[[1]]) > 0) {
     M <- length(selected$loo_effects[[1]])
-    vals <- if (series == "att") unlist(selected$loo_effects) else 
+    vals <- if (series == "att") unlist(selected$loo_effects) else
       rep(selected$observed, each = M) - unlist(selected$loo_effects)
     loo_dt <- data.table(
-      time  = rep(selected$time, each = M),
+      time = rep(selected$time, each = M),
       value = vals,
       group = factor(rep(1:M, times = nrow(selected)))
     )
     if (!has_permutations) p <- p + new_scale_color()
     p <- p +
-      geom_line(data = loo_dt, 
+      geom_line(data = loo_dt,
                 aes(x = time, y = value, color = "Leave-One-Out", group = group),
                 alpha = 0.2, linewidth = 0.3)
   }
   
   # Y-label -----------------------------------------------------------------
   y_lab <- switch(series,
-                  att     = "Treatment Effect",
-                  level   = "Normalized Series",
+                  att = "Treatment Effect",
+                  level = "Normalized Series",
                   origlvl = "Original Level")
+  
+  # Add "(percentage points)" only for att series and scaled percentage variables
+  if (series == "att" && multiplier != 1) {
+    no_unit_vars <- c("gptinc992j", "gdiinc992j", "swiid_gini_disp", "swiid_gini_mkt",
+                      "institution_pc1", "society_pc1")
+    
+    if (!in_variable %in% no_unit_vars) {
+      if (in_variable == "mad_gdppc"){
+        y_lab <- paste(y_lab, "(percent)")
+      } else {
+        y_lab <- paste(y_lab, "(percentage points)")
+      }
+    }
+  }
   
   # Legend scales -----------------------------------------------------------
   p <- p +
     scale_linetype_manual(
       values = c(
-        "ATT"             = "solid",
-        "Observed"        = "solid",
-        "Counterfactual"  = "dashed",
-        "Zero"            = "solid",
+        "ATT" = "solid",
+        "Observed" = "solid",
+        "Counterfactual" = "dashed",
+        "Zero" = "solid",
         "Backtrace (3yr)" = "longdash",
         "Backtrace (5yr)" = "dotdash"
       ),
@@ -294,11 +349,11 @@ plot_effects <- function(dt,
          x = "Event time (t)",
          y = y_lab,
          linetype = "Series",
-         fill     = "Confidence",
-         color    = "Permutations") +
+         fill = "Confidence",
+         color = "Permutations") +
     theme_minimal(base_size = 12) +
     theme(
-      plot.title    = element_text(hjust = 0.5, face = "bold"),
+      plot.title = element_text(hjust = 0.5, face = "bold"),
       plot.subtitle = element_text(hjust = 0.5, color = "grey40", size = rel(1.1)),
       legend.position = "bottom",
       legend.box = "vertical",
@@ -331,10 +386,10 @@ var_labels <- c(
   "Disposable Income Share: Middle 40%",
   "Disposable Income Share: Top 10%",
   "Disposable Income Share: Top 1%",
-  "Pre-Tax National Income Share (WID)",
-  "Disposable National Income Share (WID)",
-  "Disposable Gini (SWIID)",
-  "Market Gini (SWIID)",
+  "Pre-Tax Income Gini (WID)",
+  "Disposable Income Gini (WID)",
+  "Disposable Income Gini (SWIID)",
+  "Market Income Gini (SWIID)",
   "Real GDP per Capita",
   "Inflation Rate",
   "Government Debt / GDP",
