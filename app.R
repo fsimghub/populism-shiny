@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 # Download if not already present (runs only once per deployment/session as needed)
-data_url <- "https://github.com/fsimmen/populism-shiny/releases/download/v1.0-data/ShinyPopDat.qs"
+data_url <- "https://github.com/fsimghub/populism-shiny/releases/download/v1.0-data/ShinyPopDat.qs"
 data_path <- "data/ShinyPopDat.qs"
 
 # Ensure data directory exists
