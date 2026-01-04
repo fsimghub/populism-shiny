@@ -20,12 +20,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# Download if not already present (runs only once per deployment/session as needed)
 data_url <- "https://github.com/fsimghub/populism-shiny/releases/download/v1.0-data/ShinyPopDat.qs"
 
-# Download if not already present (runs only once per deployment/session as needed)
-if (!file.exists("data/ShinyPopDat.qs")) {
-  dir.create("data", showWarnings = FALSE)
-  download.file(data_url, "data/ShinyPopDat.qs", mode = "wb")
+# Clean up any leftover qs chunking files on startup
+cleanup_qs_chunks <- function(dir = "data") {
+  pattern <- "^ShinyPopDat\\.qs-chunking-"
+  files <- list.files(dir, pattern = pattern, full.names = TRUE)
+  if (length(files) > 0) {
+    message("Cleaning up ", length(files), " leftover qs chunk files...")
+    file.remove(files)
+  }
+}
+
+cleanup_qs_chunks("data")
+
+# Now safely load the data
+if (!exists("ShinyPopDat")) {
+  library(qs)
+  ShinyPopDat <- qread("data/ShinyPopDat.qs", strict = FALSE)  # Key: strict = FALSE avoids chunking
 }
 
 # Check if the 'pacman' package is installed; if not, install it from CRAN
