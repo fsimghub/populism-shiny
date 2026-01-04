@@ -49,6 +49,8 @@ pacman::p_load(
   rlang
 )
 
+.active_sessions <- 0L
+.shutdown_scheduled <- FALSE
 
 ###############################
 ### FUNCTIONS
@@ -702,6 +704,7 @@ percent_vars <- c(
   "mad_gdppc", "inflrate", "gmd_govdebt_GDP", "gptinc992j", "gdiinc992j"
 )
 
+#### UI ####
 ui <- fluidPage(
   
   fluidRow(
@@ -992,12 +995,16 @@ ui <- fluidPage(
   )
 )
 
+#### SERVER ####
 server <- function(input, output, session) {
-
-  # Stop app when browser closes
-  session$onSessionEnded(function() {
-    stopApp()
-  })
+  
+  # # Stop app when browser closes
+  # session$onSessionEnded(function() {
+  #   stopApp()
+  # })
+  #
+  
+  .active_sessions <<- .active_sessions + 1L
   
   # Helper functions
   label_method <- function(meth) {
@@ -1406,6 +1413,20 @@ server <- function(input, output, session) {
       casesinlvl = casesinlvl_val,
       IHS = ihs_val
     )
+  })
+  
+  session$onSessionEnded(function() {
+    
+    .active_sessions <<- .active_sessions - 1L
+    
+    if (.active_sessions == 0L && !.shutdown_scheduled) {
+      .shutdown_scheduled <<- TRUE
+      
+      # allow downloads / plotting devices to finish
+      later::later(function() {
+        stopApp()
+      }, delay = 1)
+    }
   })
 }
 
