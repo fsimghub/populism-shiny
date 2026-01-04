@@ -28,9 +28,6 @@ if (!file.exists("data/ShinyPopDat.qs")) {
   download.file(data_url, "data/ShinyPopDat.qs", mode = "wb")
 }
 
-rm(list=ls())
-gc()
-
 # Check if the 'pacman' package is installed; if not, install it from CRAN
 if (!require("pacman", character.only = TRUE)) {
   install.packages("pacman")
@@ -996,6 +993,11 @@ ui <- fluidPage(
 )
 
 server <- function(input, output, session) {
+
+  # Stop app when browser closes
+  session$onSessionEnded(function() {
+    stopApp()
+  })
   
   # Helper functions
   label_method <- function(meth) {
