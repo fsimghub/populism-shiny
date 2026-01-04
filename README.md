@@ -14,10 +14,12 @@ Available options include:
 - **Leave-One-Donor-Out permutations:** robustness check omitting one donor at a time  
 - **Donor-Placebo permutations:** placebo treatments assigned counterfactually to donor units (not available for counterfactual series)  
 
-The app supports **single-panel view** or **Dual Plot View Mode** (side-by-side panels). In Dual Plot View, users can choose:
+For the case-level perspective, the app supports a **single-panel view** or **Dual Plot View Mode** (side-by-side panels). In Dual Plot View, users can choose:
 
 - **Shared Mode:** identical options across panels  
 - **Separate Mode:** independent options per panel  
+
+The **Pooled Perspective** button accesses an aggregate, cross-case perspective, allowing users to subset results by region and date and to summarize treatment effects using mean or median diagnostic measures.
 
 Cases and options are restricted to those meeting pre-estimation requirements; availability varies by database and data coverage. Case names follow the scheme **ISO3 country code + treatment year**. Detailed information on individual populist cases is in the Appendix of the accompanying paper.  
 
@@ -25,7 +27,7 @@ Cases and options are restricted to those meeting pre-estimation requirements; a
 
 ## Data
 
-The app uses a pre-processed dataset (`ShinyPopDat.qs`, ~93 MB) that is too large to store directly in the GitHub repository.  
+The app uses a pre-processed dataset (`ShinyPopDat.qs`, ~85 MB) that is too large to store directly in the GitHub repository.  
 
 The data file is hosted as a **release asset**:
 
