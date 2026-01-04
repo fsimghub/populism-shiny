@@ -45,7 +45,7 @@ if (!file.exists(data_path)) {
 
 # Load with qs, avoiding chunking
 library(qs)
-ShinyPopDat <- qread(data_path, strict = FALSE)
+ShinyPopDat <- qread(data_path, use_alt_rep = TRUE)
 
 # Check if the 'pacman' package is installed; if not, install it from CRAN
 if (!require("pacman", character.only = TRUE)) {
