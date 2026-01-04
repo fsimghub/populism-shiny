@@ -1,8 +1,8 @@
 # Interactive Visualisation of Populist Leadership Effects
 
-This Shiny app visualizes causal estimates of the effects of populist leaders on economic growth and distributional outcomes (e.g., inequality) using the traditional Synthetic Control Method (SCM) and the Augmented Synthetic Control Method (ASCM). The outcome model employs matrix completion.  
+This Shiny app visualizes causal estimates of the effects of populist leaders on economic growth, distributional outcomes (income inequality), and institutional quality using the traditional Synthetic Control Method (SCM) and the Augmented Synthetic Control Method (ASCM). The outcome model employs matrix completion.  
 
-Users can select specific populist episodes, outcomes, and donor pools from three databases (PLE, GDP, or combined). For each case, the app displays either:
+Users can select specific populist episodes, outcomes, and donor pools from three databases (PLE, GDP, or combined). For each case, the app displays for the individual **case-level perspective** either:
 
 1. Observed versus counterfactual outcome trajectories  
 2. Estimated treatment effect series  
@@ -19,7 +19,7 @@ For the case-level perspective, the app supports a **single-panel view** or **Du
 - **Shared Mode:** identical options across panels  
 - **Separate Mode:** independent options per panel  
 
-The **Pooled Perspective** button accesses an aggregate, cross-case perspective, allowing users to subset results by region and date and to summarize treatment effects using mean or median diagnostic measures.
+**Pooled Perspective** accesses an aggregate view across cases, allowing users to subset results by region, date, and diagnostic measures. It pools treatment effects using mean or median and allows for the inverse hyperbolic sine (IHS) transformation of the data.
 
 Cases and options are restricted to those meeting pre-estimation requirements; availability varies by database and data coverage. Case names follow the scheme **ISO3 country code + treatment year**. Detailed information on individual populist cases is in the Appendix of the accompanying paper.  
 
