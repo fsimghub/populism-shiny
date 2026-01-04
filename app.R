@@ -31,9 +31,6 @@ if (!file.exists("data/ShinyPopDat.qs")) {
 rm(list=ls())
 gc()
 
-# Set working directory
-setwd("~/Nextcloud/Projekte/Populism_v2/Populism-Shiny-App")
-
 # Check if the 'pacman' package is installed; if not, install it from CRAN
 if (!require("pacman", character.only = TRUE)) {
   install.packages("pacman")
@@ -42,6 +39,7 @@ if (!require("pacman", character.only = TRUE)) {
 pacman::p_load(
   data.table,
   dplyr,
+  stringr,
   ggnewscale,
   ggplot2,
   grid,
@@ -215,7 +213,7 @@ plot_effects <- function(dt,
   
   # Main lines --------------------------------------------------------------
   if (series == "att") {
-    p <- p + geom_line(aes(y = ATT, linetype = "ATT"),
+    p <- p + geom_line(aes(y = ATT, linetype = "Treatment Effect"),
                        color = "black", linewidth = 0.8)
   } else {
     p <- p +
@@ -316,7 +314,7 @@ plot_effects <- function(dt,
   p <- p +
     scale_linetype_manual(
       values = c(
-        "ATT" = "solid",
+        "Treatment Effect" = "solid",
         "Observed" = "solid",
         "Counterfactual" = "dashed",
         "Zero" = "solid",
@@ -325,7 +323,7 @@ plot_effects <- function(dt,
       ),
       breaks = {
         brks <- character()
-        if (series == "att") brks <- c("ATT", "Zero")
+        if (series == "att") brks <- c("Treatment Effect", "Zero")
         else brks <- c("Observed", "Counterfactual")
         if (set_backtracing_3yr) brks <- c(brks, "Backtrace (3yr)")
         if (set_backtracing_5yr) brks <- c(brks, "Backtrace (5yr)")
@@ -369,6 +367,300 @@ plot_effects <- function(dt,
   return(p)
 }
 
+pooled_plot <- function(db = "both",
+                        var = "gmd_govdebt_GDP",
+                        est = "asyn",
+                        class = "class1",
+                        xvars = "none",
+                        pooling = "mean",
+                        left_right = TRUE,
+                        tspan = NULL,
+                        r_gion = NULL,
+                        subr_gion = NULL,
+                        x100 = FALSE,
+                        mseratio = NULL,
+                        maxruns = NULL,
+                        intime = NULL,
+                        type = "att",
+                        casesinlvl = "estimate",
+                        IHS = FALSE) {
+  
+  # 1. Base selection
+  selection <- ShinyPopDat$caselevel_dt[
+    database == db &
+      variable == var &
+      method == est &
+      preperiod == class &
+      covariates == xvars
+  ]
+  
+  if (nrow(selection) == 0) {
+    warning("No cases match the base selection criteria.")
+    return(ggplot() + labs(title = "No data"))
+  }
+  
+  # 2. Optional geographic/time filters
+  if (!is.null(tspan)) {
+    selection <- selection[treatmentyear >= tspan[1] & treatmentyear <= tspan[2]]
+  }
+  
+  if (!is.null(r_gion)) {
+    selection <- selection[region %in% r_gion]
+  }
+  
+  if (!is.null(subr_gion)) {
+    selection <- selection[subregion %in% subr_gion]
+  }
+  
+  # 3. Test result restrictions
+  group_val <- unique(selection$group)
+  if (length(group_val) != 1) group_val <- group_val[1]
+  
+  test_sel <- ShinyPopDat$testresult_dt[
+    database == db &
+      group == group_val &
+      variable == var &
+      method == est &
+      preperiod == class &
+      covariates == xvars
+  ]
+  
+  if (!is.null(mseratio)) test_sel <- test_sel[mse_ratio < mseratio]
+  if (!is.null(maxruns))  test_sel <- test_sel[p_maxruns > maxruns]
+  if (!is.null(intime))   test_sel <- test_sel[p_wilcox > intime]
+  
+  eligible_cases <- unique(test_sel$casename)
+  
+  if (length(eligible_cases) > 0) {
+    selection <- selection[casename %in% eligible_cases]
+  }
+  
+  if (nrow(selection) == 0) {
+    warning("No cases remain after applying test result restrictions.")
+    return(ggplot() + labs(title = "No eligible cases"))
+  }
+  
+  # Compute counterfactual
+  selection[, counterfactual := observed - ATT]
+  
+  # 4. Optional x100 scaling
+  multiplier <- if (x100) 100 else 1
+  if (x100) {
+    selection[, ATT := ATT * 100]
+    selection[, observed := observed * 100]
+    selection[, counterfactual := counterfactual * 100]
+  }
+  
+  # 5. Apply IHS transformation EARLY if requested
+  if (IHS) {
+    selection[, `:=`(
+      ATT = asinh(ATT),
+      observed = asinh(observed),
+      counterfactual = asinh(counterfactual)
+    )]
+  }
+  
+  plotdat <- copy(selection)
+  
+  # 6. Determine has_left, has_right
+  has_left <- any(plotdat$leftcase == 1)
+  has_right <- any(plotdat$leftcase == 0)
+  
+  # 7. Build plot
+  p <- ggplot() +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "black") +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "black")
+  
+  agg_func <- if (pooling == "mean") mean else if (pooling == "median") median else NULL
+  
+  # === Y-label logic ===
+  base_y_lab <- switch(type,
+                       att = "Treatment Effect",
+                       level = "Normalized Series")
+  
+  y_lab <- base_y_lab
+  
+  # Add units only for ATT and when scaled
+  if (type == "att" && multiplier != 1) {
+    no_unit_vars <- c("gptinc992j", "gdiinc992j", "swiid_gini_disp", "swiid_gini_mkt",
+                      "institution_pc1", "society_pc1")
+    
+    if (!var %in% no_unit_vars) {
+      if (var == "mad_gdppc") {
+        y_lab <- paste(y_lab, "(percent)")
+      } else {
+        y_lab <- paste(y_lab, "(percentage points)")
+      }
+    }
+  }
+  
+  # Add IHS prefix if transformation applied
+  if (IHS) {
+    y_lab <- paste("IHS(", y_lab, ")")
+  }
+  
+  if (type == "att") {
+    
+    p <- p +
+      geom_line(data = plotdat,
+                aes(x = time, y = ATT, group = casename, colour = "Individual cases", linetype = "Individual cases"),
+                linewidth = 0.2, alpha = 0.33)
+    
+    pooled_lines <- data.table()
+    
+    if (!is.null(agg_func) && pooling != "none") {
+      show_overall <- !(left_right && (has_left != has_right))
+      
+      if (show_overall) {
+        overall <- plotdat[, .(Estimate = agg_func(ATT, na.rm = TRUE)), by = time]
+        overall[, Type := "Overall"]
+        pooled_lines <- rbind(pooled_lines, overall)
+      }
+      
+      if (left_right && has_left) {
+        left <- plotdat[leftcase == 1, .(Estimate = agg_func(ATT, na.rm = TRUE)), by = time]
+        left[, Type := "Left"]
+        pooled_lines <- rbind(pooled_lines, left)
+      }
+      
+      if (left_right && has_right) {
+        right <- plotdat[leftcase == 0, .(Estimate = agg_func(ATT, na.rm = TRUE)), by = time]
+        right[, Type := "Right"]
+        pooled_lines <- rbind(pooled_lines, right)
+      }
+      
+      if (nrow(pooled_lines) > 0) {
+        p <- p +
+          geom_line(data = pooled_lines,
+                    aes(x = time, y = Estimate, colour = Type, linetype = Type),
+                    linewidth = 1.2)
+      }
+    }
+    
+    # Legend (unchanged)
+    desired_order <- c("Overall", "Left", "Right", "Individual cases")
+    present <- c()
+    if (nrow(pooled_lines) > 0) present <- unique(pooled_lines$Type)
+    if (nrow(plotdat) > 0) present <- unique(c(present, "Individual cases"))
+    present_in_order <- desired_order[desired_order %in% present]
+    
+    colour_values_named <- c("Overall" = "black",
+                             "Left" = "#FFD700",
+                             "Right" = "#800080",
+                             "Individual cases" = "steelblue")
+    linetype_values_named <- c("Overall" = "solid",
+                               "Left" = "dashed",
+                               "Right" = "dotdash",
+                               "Individual cases" = "solid")
+    
+    colour_values <- colour_values_named[present_in_order]
+    linetype_values <- linetype_values_named[present_in_order]
+    
+    p <- p +
+      scale_colour_manual(name = NULL, values = colour_values, limits = present_in_order) +
+      scale_linetype_manual(name = NULL, values = linetype_values, limits = present_in_order)
+    
+    is_pooled <- present_in_order %in% c("Overall", "Left", "Right")
+    linewidth_over <- ifelse(is_pooled, 1.2, 0.2)
+    alpha_over <- ifelse(is_pooled, 1, 0.33)
+    linetype_over <- linetype_values_named[present_in_order]
+    
+    p <- p + guides(colour = guide_legend(
+      override.aes = list(linewidth = linewidth_over,
+                          alpha = alpha_over,
+                          linetype = linetype_over),
+      order = 1),
+      linetype = "none")
+    
+    all_y <- plotdat$ATT
+    if (nrow(pooled_lines) > 0) all_y <- c(all_y, pooled_lines$Estimate)
+    
+  } else if (type == "level") {
+    
+    ind_var <- if (casesinlvl == "estimate") "counterfactual" else "observed"
+    ind_label <- if (casesinlvl == "estimate") "Individual Case Estimate" else "Individual Case Observation"
+    
+    p <- p +
+      geom_line(data = plotdat,
+                aes(x = time, y = get(ind_var), group = casename, colour = ind_label, linetype = ind_label),
+                linewidth = 0.2, alpha = 0.33)
+    
+    pooled_lines <- data.table()
+    
+    if (!is.null(agg_func) && pooling != "none") {
+      obs_agg <- plotdat[, .(Estimate = agg_func(observed, na.rm = TRUE)), by = time]
+      obs_agg[, Type := "Observed"]
+      
+      cf_agg <- plotdat[, .(Estimate = agg_func(counterfactual, na.rm = TRUE)), by = time]
+      cf_agg[, Type := "Counterfactual"]
+      
+      pooled_lines <- rbind(obs_agg, cf_agg)
+      
+      p <- p +
+        geom_line(data = pooled_lines,
+                  aes(x = time, y = Estimate, colour = Type, linetype = Type),
+                  linewidth = 1.2)
+    }
+    
+    # Legend for level
+    desired_order <- c("Observed", "Counterfactual", ind_label)
+    present <- c(ind_label)
+    if (nrow(pooled_lines) > 0) present <- unique(c(present, unique(pooled_lines$Type)))
+    present_in_order <- desired_order[desired_order %in% present]
+    
+    colour_values_named <- c("Observed" = "black",
+                             "Counterfactual" = "black",
+                             "Individual Case Estimate" = "steelblue",
+                             "Individual Case Observation" = "steelblue")
+    linetype_values_named <- c("Observed" = "solid",
+                               "Counterfactual" = "dashed",
+                               "Individual Case Estimate" = "solid",
+                               "Individual Case Observation" = "solid")
+    
+    colour_values <- colour_values_named[present_in_order]
+    linetype_values <- linetype_values_named[present_in_order]
+    
+    p <- p +
+      scale_colour_manual(name = NULL, values = colour_values, limits = present_in_order) +
+      scale_linetype_manual(name = NULL, values = linetype_values, limits = present_in_order)
+    
+    is_pooled <- present_in_order %in% c("Observed", "Counterfactual")
+    linewidth_over <- ifelse(is_pooled, 1.2, 0.2)
+    alpha_over <- ifelse(is_pooled, 1, 0.33)
+    linetype_over <- linetype_values_named[present_in_order]
+    
+    p <- p + guides(colour = guide_legend(
+      override.aes = list(linewidth = linewidth_over,
+                          alpha = alpha_over,
+                          linetype = linetype_over),
+      order = 1),
+      linetype = "none")
+    
+    all_y <- plotdat[[ind_var]]
+    if (nrow(pooled_lines) > 0) all_y <- c(all_y, pooled_lines$Estimate)
+  }
+  
+  # Y-axis limits
+  y_range <- range(all_y, na.rm = TRUE)
+  y_margin <- diff(y_range) * 0.05
+  y_lim <- y_range + c(-y_margin, y_margin)
+  
+  # Final plot
+  p <- p +
+    coord_cartesian(xlim = range(plotdat$time), ylim = y_lim) +
+    labs(
+      x = "Event time (t)",
+      y = y_lab
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "bottom",
+      legend.key.width = unit(1.5, "cm")
+    )
+  
+  return(p)
+}
+
 
 ###############################
 ### DATA AND SHINY APP
@@ -378,35 +670,40 @@ ShinyPopDat <- qread(file = "data/ShinyPopDat.qs")
 
 # Variable labels (human-readable, for display)
 var_labels <- c(
-  "Pre-Tax Income Share: Bottom 50%",
-  "Pre-Tax Income Share: Middle 40%",
-  "Pre-Tax Income Share: Top 10%",
-  "Pre-Tax Income Share: Top 1%",
-  "Disposable Income Share: Bottom 50%",
-  "Disposable Income Share: Middle 40%",
-  "Disposable Income Share: Top 10%",
-  "Disposable Income Share: Top 1%",
-  "Pre-Tax Income Gini (WID)",
-  "Disposable Income Gini (WID)",
-  "Disposable Income Gini (SWIID)",
-  "Market Income Gini (SWIID)",
-  "Real GDP per Capita",
-  "Inflation Rate",
-  "Government Debt / GDP",
-  "Institutions",
-  "Civil Society"
-)
-
-# Corresponding internal variable codes
-var_names <- c(
-  "sptinc992j_p0p50", "sptinc992j_p50p90", "sptinc992j_p90p100", "sptinc992j_p99p100",
-  "sdiinc992j_p0p50", "sdiinc992j_p50p90", "sdiinc992j_p90p100", "sdiinc992j_p99p100",
-  "gptinc992j", "gdiinc992j", "swiid_gini_disp", "swiid_gini_mkt",
-  "mad_gdppc", "inflrate", "gmd_govdebt_GDP", "institution_pc1", "society_pc1"
+  "Pre-Tax Income Share: Bottom 50%" = "sptinc992j_p0p50",
+  "Pre-Tax Income Share: Middle 40%" = "sptinc992j_p50p90",
+  "Pre-Tax Income Share: Top 10%" = "sptinc992j_p90p100",
+  "Pre-Tax Income Share: Top 1%" = "sptinc992j_p99p100",
+  "Disposable Income Share: Bottom 50%" = "sdiinc992j_p0p50",
+  "Disposable Income Share: Middle 40%" = "sdiinc992j_p50p90",
+  "Disposable Income Share: Top 10%" = "sdiinc992j_p90p100",
+  "Disposable Income Share: Top 1%" = "sdiinc992j_p99p100",
+  "Pre-Tax Income Gini (WID)" = "gptinc992j",
+  "Disposable Income Gini (WID)" = "gdiinc992j",
+  "Disposable Income Gini (SWIID)" = "swiid_gini_disp",
+  "Market Income Gini (SWIID)" = "swiid_gini_mkt",
+  "Real GDP per Capita" = "mad_gdppc",
+  "Inflation Rate" = "inflrate",
+  "Government Debt / GDP" = "gmd_govdebt_GDP",
+  "Institutions" = "institution_pc1",
+  "Civil Society" = "society_pc1"
 )
 
 # Mapping from displayed label to internal code
-label_to_code <- setNames(var_names, var_labels)
+label_to_code <- setNames(
+  c("sptinc992j_p0p50", "sptinc992j_p50p90", "sptinc992j_p90p100", "sptinc992j_p99p100",
+    "sdiinc992j_p0p50", "sdiinc992j_p50p90", "sdiinc992j_p90p100", "sdiinc992j_p99p100",
+    "gptinc992j", "gdiinc992j", "swiid_gini_disp", "swiid_gini_mkt",
+    "mad_gdppc", "inflrate", "gmd_govdebt_GDP", "institution_pc1", "society_pc1"),
+  names(var_labels)
+)
+
+# Variables that should be multiplied by 100
+percent_vars <- c(
+  "sptinc992j_p0p50", "sptinc992j_p50p90", "sptinc992j_p90p100", "sptinc992j_p99p100",
+  "sdiinc992j_p0p50", "sdiinc992j_p50p90", "sdiinc992j_p90p100", "sdiinc992j_p99p100",
+  "mad_gdppc", "inflrate", "gmd_govdebt_GDP", "gptinc992j", "gdiinc992j"
+)
 
 ui <- fluidPage(
   
@@ -419,22 +716,27 @@ ui <- fluidPage(
   hr(),
   
   fluidRow(
-    column(6,
+    column(12,
            radioButtons("view_mode", "View Mode",
-                        choices = c("Dual Plot" = "dual", "Single Plot" = "single"),
-                        selected = "dual", inline = TRUE)
-    ),
-    column(6,
-           conditionalPanel(
-             condition = "input.view_mode == 'dual'",
-             radioButtons("control_mode", "Control Mode (Dual View)",
-                          choices = c("Shared", "Separate"),
-                          selected = "Shared", inline = TRUE)
-           )
+                        choices = c("Single Plot" = "single",
+                                    "Dual Plot" = "dual",
+                                    "Pooled Perspective" = "pooled"),
+                        selected = "single", inline = TRUE)
     )
   ),
   
-  # Single Plot mode
+  conditionalPanel(
+    condition = "input.view_mode == 'dual'",
+    fluidRow(
+      column(12,
+             radioButtons("control_mode", "Control Mode (Dual View)",
+                          choices = c("Shared", "Separate"),
+                          selected = "Shared", inline = TRUE)
+      )
+    )
+  ),
+  
+  # ================== SINGLE PLOT MODE ==================
   conditionalPanel(
     condition = "input.view_mode == 'single'",
     fluidRow(
@@ -459,7 +761,7 @@ ui <- fluidPage(
              h4("Display Options"),
              radioButtons("series_single", "Series Mode",
                           choices = c("Treatment Effect" = "att",
-                                      "Counterfactual"  = "level"),
+                                      "Counterfactual" = "level"),
                           selected = "att", inline = TRUE),
              checkboxInput("set_ci_single", "Show 95% Confidence Interval", value = FALSE),
              checkboxInput("set_backtracing_3yr_single", "Backtrace (3 years)", value = FALSE),
@@ -473,7 +775,7 @@ ui <- fluidPage(
     )
   ),
   
-  # Dual Shared mode
+  # ================== DUAL SHARED MODE ==================
   conditionalPanel(
     condition = "input.view_mode == 'dual' && input.control_mode == 'Shared'",
     fluidRow(
@@ -501,7 +803,7 @@ ui <- fluidPage(
                          choices = character(0)),
              radioButtons("series_shared", "Series Mode",
                           choices = c("Treatment Effect" = "att",
-                                      "Counterfactual"  = "level"),
+                                      "Counterfactual" = "level"),
                           selected = "att", inline = TRUE),
              checkboxInput("set_ci_shared", "Show 95% Confidence Interval", value = FALSE),
              checkboxInput("set_backtracing_3yr_shared", "Backtrace (3 years)", value = FALSE),
@@ -515,7 +817,7 @@ ui <- fluidPage(
     )
   ),
   
-  # Dual Separate mode
+  # ================== DUAL SEPARATE MODE ==================
   conditionalPanel(
     condition = "input.view_mode == 'dual' && input.control_mode == 'Separate'",
     fluidRow(
@@ -536,7 +838,7 @@ ui <- fluidPage(
                          choices = character(0)),
              radioButtons("series_left", "Series Mode",
                           choices = c("Treatment Effect" = "att",
-                                      "Counterfactual"  = "level"),
+                                      "Counterfactual" = "level"),
                           selected = "att", inline = TRUE),
              checkboxInput("set_ci_left", "Show 95% Confidence Interval", value = FALSE),
              checkboxInput("set_backtracing_3yr_left", "Backtrace (3 years)", value = FALSE),
@@ -564,7 +866,7 @@ ui <- fluidPage(
                          choices = character(0)),
              radioButtons("series_right", "Series Mode",
                           choices = c("Treatment Effect" = "att",
-                                      "Counterfactual"  = "level"),
+                                      "Counterfactual" = "level"),
                           selected = "att", inline = TRUE),
              checkboxInput("set_ci_right", "Show 95% Confidence Interval", value = FALSE),
              checkboxInput("set_backtracing_3yr_right", "Backtrace (3 years)", value = FALSE),
@@ -574,6 +876,82 @@ ui <- fluidPage(
                condition = "input.series_right == 'att'",
                checkboxInput("set_case_permutation_right", "Donor-Placebo Permutations", value = FALSE)
              )
+      )
+    )
+  ),
+  
+  # ================== POOLED PERSPECTIVE MODE ==================
+  conditionalPanel(
+    condition = "input.view_mode == 'pooled'",
+    fluidRow(
+      column(6,
+             selectInput("db_pooled", "Database",
+                         choices = c(
+                           "Combined Database" = "both",
+                           "PLE (Funke et al.)" = "ple",
+                           "GPD (Hawkins et al.)" = "gpd"
+                         ),
+                         selected = "both"),
+             
+             selectInput("var_label_pooled", "Variable",
+                         choices = var_labels, selected = "mad_gdppc"),
+             
+             selectInput("est_pooled", "Method",
+                         choices = c(
+                           "ASCM MCPanel" = "asyn",
+                           "SCM" = "syn"
+                         ),
+                         selected = "asyn"),
+             
+             selectInput("class_pooled", "Preperiod",
+                         choices = c(
+                           "15 years" = "class1",
+                           "10 years" = "class2"
+                         ),
+                         selected = "class1"),
+             
+             selectInput("pooling_pooled", "Pooling",
+                         choices = c("mean", "median", "none"), selected = "mean"),
+             
+             selectInput("ihs_pooled", "Transformation",
+                         choices = c("None" = "none", "Inverse Hyperbolic Sine (IHS)" = "ihs"),
+                         selected = "none")
+      ),
+      column(6,
+             radioButtons("type_pooled", "Plot Type",
+                          choices = c("Treatment Effect (ATT)" = "att",
+                                      "Normalized Levels" = "level"),
+                          selected = "att", inline = TRUE),
+             
+             conditionalPanel(
+               condition = "input.type_pooled == 'att'",
+               checkboxInput("left_right_pooled", "Show by political orientation (Left/Right)",
+                             value = TRUE)
+             ),
+             
+             conditionalPanel(
+               condition = "input.type_pooled == 'level'",
+               radioButtons("casesinlvl_pooled", "Individual cases:",
+                            choices = c("Counterfactual Estimate" = "estimate",
+                                        "Observed Values" = "observed"),
+                            selected = "estimate", inline = TRUE)
+             ),
+             
+             checkboxGroupInput("r_gion_pooled", "Regions",
+                                choices = c("Africa", "Americas", "Asia", "Europe", "Oceania"),
+                                selected = NULL, inline = TRUE),
+             
+             sliderInput("tspan_pooled", "Treatment Year Range",
+                         min = 1900, max = 2020, value = c(1900, 2020), step = 1, sep = ""),
+             
+             numericInput("mseratio_pooled", "MSE ratio (max allowed)",
+                          value = 1, min = 0, step = 0.01),
+             
+             numericInput("maxruns_pooled", "Sign-flip maxruns test (min p >)",
+                          value = 0.01, min = 0, max = 1, step = 0.01),
+             
+             numericInput("intime_pooled", "In-time placebo test (min p >)",
+                          value = 0.1, min = 0, max = 1, step = 0.01)
       )
     )
   ),
@@ -597,7 +975,6 @@ ui <- fluidPage(
             <p>Case names follow the scheme ISO3 country code and treatment year, indicating when the populist comes to power. Detailed information on the individual populist cases is in the Appendix of the accompanying paper.</p>")
     )
   ),
- 
   tags$footer(
     style = "
     text-align: center;
@@ -618,7 +995,6 @@ ui <- fluidPage(
   )
 )
 
-
 server <- function(input, output, session) {
   
   # Helper functions
@@ -638,7 +1014,6 @@ server <- function(input, output, session) {
                   ifelse(db == "gpd", "GPD (Hawkins et al.)", db)))
   }
   
-  # Reverse helpers
   get_method_code <- function(label) ifelse(label == "ASCM MCPanel", "asyn",
                                             ifelse(label == "SCM", "syn", label))
   get_preperiod_code <- function(label) ifelse(label == "15 years", "class1",
@@ -651,15 +1026,17 @@ server <- function(input, output, session) {
   output$plots_ui <- renderUI({
     if (input$view_mode == "single") {
       fluidRow(column(12, plotOutput("plot_single", height = "750px")))
-    } else {
+    } else if (input$view_mode == "dual") {
       fluidRow(
         column(6, plotOutput("plot_left", height = "650px")),
         column(6, plotOutput("plot_right", height = "650px"))
       )
+    } else if (input$view_mode == "pooled") {
+      fluidRow(column(12, plotOutput("plot_pooled", height = "750px")))
     }
   })
   
-  # === Single Plot mode ===
+  # ================== SINGLE PLOT OBSERVERS & PLOT ==================
   observe({
     dt <- ShinyPopDat$caselevel_dt
     updateSelectInput(session, "casename_single",
@@ -670,7 +1047,7 @@ server <- function(input, output, session) {
     req(input$casename_single)
     dt <- ShinyPopDat$caselevel_dt[casename == input$casename_single]
     available_codes <- sort(unique(dt$variable))
-    available_labels <- var_labels[var_names %in% available_codes]
+    available_labels <- names(var_labels)[var_labels %in% available_codes]
     selected_label <- if ("Real GDP per Capita" %in% available_labels) "Real GDP per Capita" else available_labels[1]
     updateSelectInput(session, "variable_single", choices = available_labels, selected = selected_label)
   })
@@ -709,7 +1086,27 @@ server <- function(input, output, session) {
     updateSelectInput(session, "database_single", choices = label_database(dbs))
   })
   
-  # === Dual Shared mode ===
+  output$plot_single <- renderPlot({
+    req(input$view_mode == "single")
+    plot_effects(
+      dt = ShinyPopDat$caselevel_dt,
+      in_casename = input$casename_single,
+      in_variable = label_to_code[input$variable_single],
+      in_covariates = input$covariates_single,
+      in_method = get_method_code(input$method_single),
+      in_preperiod = get_preperiod_code(input$preperiod_single),
+      in_database = get_database_code(input$database_single),
+      baseval = ShinyPopDat$basevalues_dt,
+      set_backtracing_3yr = input$set_backtracing_3yr_single,
+      set_backtracing_5yr = input$set_backtracing_5yr_single,
+      set_case_permutation = input$set_case_permutation_single,
+      set_loo_permutation = input$set_loo_permutation_single,
+      set_ci = input$set_ci_single,
+      series = input$series_single
+    )
+  })
+  
+  # ================== DUAL SHARED OBSERVERS ==================
   observe({
     dt <- ShinyPopDat$caselevel_dt
     updateSelectInput(session, "casename_shared", choices = sort(unique(dt$casename)))
@@ -719,7 +1116,7 @@ server <- function(input, output, session) {
     req(input$casename_shared)
     dt <- ShinyPopDat$caselevel_dt[casename == input$casename_shared]
     available_codes <- sort(unique(dt$variable))
-    available_labels <- var_labels[var_names %in% available_codes]
+    available_labels <- names(var_labels)[var_labels %in% available_codes]
     selected_label <- if ("Real GDP per Capita" %in% available_labels) "Real GDP per Capita" else available_labels[1]
     updateSelectInput(session, "variable_shared", choices = available_labels, selected = selected_label)
   })
@@ -728,10 +1125,9 @@ server <- function(input, output, session) {
     req(input$casename_shared, input$variable_shared, input$casename_right_shared)
     left_code <- label_to_code[input$variable_shared]
     dt <- ShinyPopDat$caselevel_dt
-    left_sub <- unique(dt[casename == input$casename_shared & variable == left_code, .(covariates, method, preperiod, database)])
     right_case <- input$casename_right_shared
     right_vars_raw <- unique(dt[casename == right_case]$variable)
-    possible_labels <- var_labels[var_names %in% right_vars_raw]
+    possible_labels <- names(var_labels)[var_labels %in% right_vars_raw]
     current_label <- input$variable_right_shared %||% input$variable_shared
     selected <- if (current_label %in% possible_labels) current_label else input$variable_shared
     if (!(selected %in% possible_labels)) selected <- possible_labels[1]
@@ -751,7 +1147,6 @@ server <- function(input, output, session) {
     updateSelectInput(session, "covariates_shared", choices = common_cov, selected = selected)
   })
   
-  # Remaining shared observers (method, preperiod, database) unchanged except using label_to_code
   observe({
     req(input$casename_shared, input$variable_shared, input$casename_right_shared, input$variable_right_shared, input$covariates_shared)
     left_code <- label_to_code[input$variable_shared]
@@ -797,7 +1192,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "database_shared", choices = choices, selected = selected)
   })
   
-  # === Dual Separate mode (Left) ===
+  # ================== DUAL SEPARATE OBSERVERS (LEFT) ==================
   observe({
     dt <- ShinyPopDat$caselevel_dt
     updateSelectInput(session, "casename_left", choices = sort(unique(dt$casename)))
@@ -807,7 +1202,7 @@ server <- function(input, output, session) {
     req(input$casename_left)
     dt <- ShinyPopDat$caselevel_dt[casename == input$casename_left]
     available_codes <- sort(unique(dt$variable))
-    available_labels <- var_labels[var_names %in% available_codes]
+    available_labels <- names(var_labels)[var_labels %in% available_codes]
     selected_label <- if ("Real GDP per Capita" %in% available_labels) "Real GDP per Capita" else available_labels[1]
     updateSelectInput(session, "variable_left", choices = available_labels, selected = selected_label)
   })
@@ -846,7 +1241,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "database_left", choices = label_database(dbs))
   })
   
-  # === Dual Separate mode (Right) ===
+  # ================== DUAL SEPARATE OBSERVERS (RIGHT) ==================
   observe({
     dt <- ShinyPopDat$caselevel_dt
     updateSelectInput(session, "casename_right", choices = sort(unique(dt$casename)))
@@ -856,8 +1251,8 @@ server <- function(input, output, session) {
     req(input$casename_right)
     dt <- ShinyPopDat$caselevel_dt[casename == input$casename_right]
     available_codes <- sort(unique(dt$variable))
-    available_labels <- var_labels[var_names %in% available_codes]
-    selected_label <- if ("Disposable Gini (SWIID)" %in% available_labels) "Disposable Gini (SWIID)" else available_labels[1]
+    available_labels <- names(var_labels)[var_labels %in% available_codes]
+    selected_label <- if ("Disposable Income Gini (SWIID)" %in% available_labels) "Disposable Income Gini (SWIID)" else available_labels[1]
     updateSelectInput(session, "variable_right", choices = available_labels, selected = selected_label)
   })
   
@@ -895,27 +1290,7 @@ server <- function(input, output, session) {
     updateSelectInput(session, "database_right", choices = label_database(dbs))
   })
   
-  # === Plot rendering ===
-  output$plot_single <- renderPlot({
-    req(input$view_mode == "single")
-    plot_effects(
-      dt = ShinyPopDat$caselevel_dt,
-      in_casename = input$casename_single,
-      in_variable = label_to_code[input$variable_single],
-      in_covariates = input$covariates_single,
-      in_method = get_method_code(input$method_single),
-      in_preperiod = get_preperiod_code(input$preperiod_single),
-      in_database = get_database_code(input$database_single),
-      baseval = ShinyPopDat$basevalues_dt,
-      set_backtracing_3yr = input$set_backtracing_3yr_single,
-      set_backtracing_5yr = input$set_backtracing_5yr_single,
-      set_case_permutation = input$set_case_permutation_single,
-      set_loo_permutation = input$set_loo_permutation_single,
-      set_ci = input$set_ci_single,
-      series = input$series_single
-    )
-  })
-  
+  # ================== PLOT RENDERING ==================
   output$plot_left <- renderPlot({
     req(input$view_mode == "dual")
     if (input$control_mode == "Shared") {
@@ -993,6 +1368,43 @@ server <- function(input, output, session) {
       )
     }
   })
+  
+  # ================== POOLED PERSPECTIVE PLOT ==================
+  output$plot_pooled <- renderPlot({
+    req(input$view_mode == "pooled", input$var_label_pooled)
+    
+    actual_var <- input$var_label_pooled
+    
+    apply_x100 <- actual_var %in% percent_vars
+    
+    r_gion_val <- if (length(input$r_gion_pooled) == 0) NULL else input$r_gion_pooled
+    
+    casesinlvl_val <- if (input$type_pooled == "level") input$casesinlvl_pooled else "estimate"
+    
+    left_right_val <- if (input$type_pooled == "att") input$left_right_pooled else FALSE
+    
+    ihs_val <- input$ihs_pooled == "ihs"
+    
+    pooled_plot(
+      db = input$db_pooled,
+      var = actual_var,
+      est = input$est_pooled,
+      class = input$class_pooled,
+      xvars = "none",
+      pooling = input$pooling_pooled,
+      left_right = left_right_val,
+      tspan = input$tspan_pooled,
+      r_gion = r_gion_val,
+      subr_gion = NULL,
+      x100 = apply_x100,
+      mseratio = input$mseratio_pooled,
+      maxruns = input$maxruns_pooled,
+      intime = input$intime_pooled,
+      type = input$type_pooled,
+      casesinlvl = casesinlvl_val,
+      IHS = ihs_val
+    )
+  })
 }
 
-shinyApp(ui = ui, server = server)
+runApp(shinyApp(ui = ui, server = server), launch.browser = TRUE)
